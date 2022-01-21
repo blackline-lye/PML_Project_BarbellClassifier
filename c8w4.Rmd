@@ -1,0 +1,112 @@
+---
+title: "Barbell Lift Classifier"
+author: "Lingjie Ye"
+date: "1/20/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE,message = FALSE)
+
+library(data.table)
+library(randomForest)
+library(caret)
+library(doParallel)
+
+```
+
+# Barbell Lift Classifier
+Lingjie Ye, 1/20/2022
+
+## Intro
+
+For the Coursera "Practical Machine Learning" course project, I'm going to create a classifier that rates barbell lifts from "A" to "E" using IMU data captured during lift attempts. 
+
+I selected the **"Random Forest" algorithm for my classifier** as it is known to perform well, and I'd like to learn about it in depth.
+
+## Data Preparation
+
+I first imported the training and test dataset. Exploring the training dataset I found the raw data to be ~20k observations of 160 variables. 
+
+Out of the 160 variables:
+* 1 variable is the classifier outcome "classe"
+* 107 variables are removed
+    + First 7 variables - observation index, tester name, timestamps and sampling parameters are irrelevant to the classifier
+    + Variables with near zero variations 
+    + Variables with >80% missing values
+* 52 variables remaining are selected as features
+
+Note I did not split the training dataset further into training and validation sets. Learning about the "Random Forest" algorithm, it gives accurate error estimates "out of bag" and does not suffer from overfitting. **The cross-validation is done by the internal process of RF when it bootstraps 70% of the training set, and leaving the remaining 30% for "out of bag" validation**. 
+
+```{r preprocess, cache=TRUE}
+
+loadData <- function(file, url) {
+    source <- ifelse(file.exists(file), file, url)
+    data <- fread(source, na.strings = c("#DIV/0", "", "NA"), stringsAsFactors = TRUE)  
+    data
+}
+
+cleanData <- function(data) {
+    removeCol <- append(1:7, nearZeroVar(data))
+    data <- data[,-..removeCol]
+    notMostlyEmpty <- sapply(data, function(x) sum(is.na(x))/length(x) < 0.8)
+    data <- data[,..notMostlyEmpty]
+    data
+}
+
+train <- loadData("pml-training.csv", "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+train <- cleanData(train)
+test <- loadData("pml-testing.csv", "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+```
+
+## Model Tuning
+
+For RFs, the parameters to tune are the number of trees to build(ntree), and number of random features selected per node(mtry). The initial best guess for mtry is sqrt of the number of features, which is `r floor(sqrt(dim(train)[2]))`.
+
+### Setting ntree
+
+Setting initial mtry to 7, I tested models from ntree=50 to ntree=500.
+
+```{r set_ntree, cache=TRUE}
+set.seed(20220120)
+tune1 <- randomForest(classe~., data=train, mtry=7, ntree=500, do.trace=50)
+plot(tune1)
+```
+
+It looks like after ntree>200 we start to get greatly diminishing returns for OOB. ~0.28% error rate is already great for this application, so I just picked ntree=250 to proceed.
+
+### Setting mtry
+
+To tune mtry, I used the tuneRF function which locks ntree at 250 and varies mtry to optimize for least OOB error rate. 
+
+```{r set_mtry, cache=TRUE}
+tune2 <- tuneRF(train[,!"classe"],train$classe,ntreeTry=250)
+```
+
+After searching left and right the best mtry turns out to be where we started: 7.
+
+## Model Analysis
+
+Let's build our model using mtry=7 and ntree=250.
+
+```{r final_model, cache=TRUE}
+rf <- randomForest(classe~., data=train, mtry=7, ntree=250, importance=TRUE)
+rf
+```
+
+The "OOB" **estimate of the error rate is 0.35%**, very impressive for a quick model!
+
+Let's take a look at the most important/influential features.
+
+```{r importance, cache=TRUE, fig.width=10}
+varImpPlot(rf, n.var=10, main="Most important features")
+```
+
+## Classify Test Dataset
+
+At last I use the model to classify the test dataset!
+
+```{r class_test, cache=TRUE}
+predict(rf, test)
+
+```
